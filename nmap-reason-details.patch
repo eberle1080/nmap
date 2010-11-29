@@ -1,0 +1,217 @@
+diff --git a/NmapOps.cc b/NmapOps.cc
+index 028f40b..e7f9c46 100644
+--- a/NmapOps.cc
++++ b/NmapOps.cc
+@@ -269,6 +269,7 @@ void NmapOps::Initialize() {
+   gettimeofday(&start_time, NULL);
+   pTrace = vTrace = false;
+   reason = false;
++  reason_details = false;
+   adler32 = false;
+   if (datadir) free(datadir);
+   datadir = NULL;
+diff --git a/NmapOps.h b/NmapOps.h
+index 50ca972..8303f8d 100644
+--- a/NmapOps.h
++++ b/NmapOps.h
+@@ -318,6 +318,7 @@ class NmapOps {
+   bool log_errors;
+   bool traceroute;
+   bool reason;
++  bool reason_details;
+   bool adler32;
+ 
+ #ifndef NOLUA
+diff --git a/nmap.cc b/nmap.cc
+index f998c60..cfb71cb 100644
+--- a/nmap.cc
++++ b/nmap.cc
+@@ -293,6 +293,7 @@ printf("%s %s ( %s )\n"
+        "  -v: Increase verbosity level (use -vv or more for greater effect)\n"
+        "  -d: Increase debugging level (use -dd or more for greater effect)\n"
+        "  --reason: Display the reason a port is in a particular state\n"
++       "  --reason-details: Display the reason a port is in a particular state (with TTL details)\n"
+        "  --open: Only show open (or possibly open) ports\n"
+        "  --packet-trace: Show all packets sent and received\n"
+        "  --iflist: Print host interfaces and routes (for debugging)\n"
+@@ -577,6 +578,7 @@ int nmap_main(int argc, char *argv[]) {
+       {"ttl", required_argument, 0, 0}, /* Time to live */
+       {"traceroute", no_argument, 0, 0},
+       {"reason", no_argument, 0, 0},
++      {"reason-details", no_argument, 0, 0},
+       {"allports", no_argument, 0, 0},
+       {"version_intensity", required_argument, 0, 0},
+       {"version-intensity", required_argument, 0, 0},
+@@ -878,7 +880,13 @@ int nmap_main(int argc, char *argv[]) {
+       } else if(strcmp(long_options[option_index].name, "traceroute") == 0) {
+         o.traceroute = true;
+       } else if(strcmp(long_options[option_index].name, "reason") == 0) {
++        if(o.reason_details)
++          fatal("Can't have --reason and --reason-details");
+         o.reason = true;
++      } else if(strcmp(long_options[option_index].name, "reason-details") == 0) {
++        if(o.reason)
++          fatal("Can't have --reason and --reason-details");
++        o.reason_details = true;
+       } else if(optcmp(long_options[option_index].name, "min-rate") == 0) {
+         if (sscanf(optarg, "%f", &o.min_packet_send_rate) != 1 || o.min_packet_send_rate <= 0.0)
+           fatal("Argument to --min-rate must be a positive floating-point number");
+diff --git a/output.cc b/output.cc
+index 315636f..4e188b9 100644
+--- a/output.cc
++++ b/output.cc
+@@ -532,7 +532,7 @@ void printportoutput(Target *currenths, PortList *plist) {
+           prevstate = istate;
+         }
+       }
+-      if (o.reason)
++      if (o.reason || o.reason_details)
+         print_state_summary(plist, STATE_REASON_EMPTY);
+       log_write(LOG_PLAIN, "\n");
+     }
+@@ -585,7 +585,7 @@ void printportoutput(Target *currenths, PortList *plist) {
+   if (prevstate != PORT_UNKNOWN)
+     log_write(LOG_PLAIN, "\n");
+ 
+-  if (o.reason)
++  if (o.reason || o.reason_details)
+     print_state_summary(plist, STATE_REASON_FULL);
+ 
+   /* OK, now it is time to deal with the service table ... */
+@@ -593,7 +593,7 @@ void printportoutput(Target *currenths, PortList *plist) {
+   portcol = colno++;
+   statecol = colno++;
+   servicecol = colno++;
+-  if (o.reason)
++  if (o.reason || o.reason_details)
+     reasoncol = colno++;
+   if (o.servicescan || o.rpcscan)
+     versioncol = colno++;
+@@ -637,6 +637,8 @@ void printportoutput(Target *currenths, PortList *plist) {
+           first = 0;
+         if (o.reason)
+           Tbl->addItem(rowno, reasoncol, true, port_reason_str(current->reason));
++        else if(o.reason_details)
++          Tbl->addItem(rowno, reasoncol, true, port_reason_details_str(current->reason));
+         state = statenum2str(current->state);
+         proto = nmap_getprotbynum(htons(current->portno));
+         Snprintf(portinfo, sizeof(portinfo), "%s", proto ? proto->p_name : "unknown");
+@@ -676,6 +678,27 @@ void printportoutput(Target *currenths, PortList *plist) {
+     current = NULL;
+     while ((current = plist->nextPort(current, &port, TCPANDUDPANDSCTP, 0)) != NULL) {
+       if (!plist->isIgnoredState(current->state)) {
++        if(o.reason_details && (current->state == PORT_FILTERED))
++        {
++            bool show = true;
++
++            switch(current->reason.reason_id)
++            {
++            case ER_ECHOREPLY:
++            case ER_NETPROHIBITED:
++            case ER_HOSTPROHIBITED:
++            case ER_ADMINPROHIBITED:
++            case 21:
++              show = true;
++              break;
++            default:
++              show = false;
++            }
++
++            if(!show)
++              continue;
++        }
++
+         if (!first)
+           log_write(LOG_MACHINE, ", ");
+         else
+@@ -734,6 +757,8 @@ void printportoutput(Target *currenths, PortList *plist) {
+         Tbl->addItem(rowno, servicecol, true, serviceinfo);
+         if (o.reason)
+           Tbl->addItem(rowno, reasoncol, true, port_reason_str(current->reason));
++        else if(o.reason_details)
++          Tbl->addItem(rowno, reasoncol, true, port_reason_details_str(current->reason));
+ 
+         sd.populateFullVersionString(fullversion, sizeof(fullversion));
+         if (*fullversion)
+@@ -1346,7 +1371,7 @@ void write_host_header(Target *currenths) {
+       log_write(LOG_PLAIN, "Nmap scan report for %s\n", currenths->NameIP());
+     } else if (currenths->flags & HOST_DOWN) {
+       log_write(LOG_PLAIN, "Nmap scan report for %s [host down", currenths->NameIP());
+-      if (o.reason)
++      if (o.reason || o.reason_details)
+         log_write(LOG_PLAIN, ", %s", target_reason_str(currenths));
+       log_write(LOG_PLAIN, "]\n");
+     }
+@@ -1412,7 +1437,7 @@ void write_host_status(Target *currenths, int resolve_all) {
+     write_xml_initial_hostinfo(currenths, (currenths->flags & HOST_UP) ? "up" : "down");
+     if (currenths->flags & HOST_UP) {
+       log_write(LOG_PLAIN, "Host is up");
+-      if (o.reason)
++      if (o.reason || o.reason_details)
+         log_write(LOG_PLAIN, ", %s", target_reason_str(currenths));
+       if (currenths->to.srtt != -1)
+         log_write(LOG_PLAIN, " (%ss latency)",
+diff --git a/portlist.cc b/portlist.cc
+index d20e9e2..e0e18a7 100644
+--- a/portlist.cc
++++ b/portlist.cc
+@@ -820,6 +820,9 @@ bool PortList::isIgnoredState(int state) {
+   if (o.debugging > 2)
+     return false;
+ 
++  if ((state == PORT_FILTERED) && o.reason_details)
++      return false;
++
+   if (state == PORT_OPEN || state == PORT_UNKNOWN || state == PORT_TESTING ||
+       state == PORT_FRESH)
+     return false; /* Cannot be ignored */
+diff --git a/portreasons.cc b/portreasons.cc
+index 7438e7b..87b5abb 100644
+--- a/portreasons.cc
++++ b/portreasons.cc
+@@ -259,8 +259,8 @@ static unsigned int get_state_summary(state_reason_summary_t *head, PortList *Po
+ 
+ 	while((current = Ports->nextPort(current, &port, proto, state)) != NULL) {
+ 		if(Ports->isIgnoredState(current->state)) {
+-			total++;
+-			update_state_summary(reason, current->reason.reason_id);
++            total++;
++            update_state_summary(reason, current->reason.reason_id);
+ 		}
+ 	}
+ 	return total;
+@@ -379,3 +379,22 @@ char *port_reason_str(state_reason_t r) {
+             (r.ip_addr.s_addr==0)?"":inet_ntoa(r.ip_addr));
+ 	return reason;	
+ }
++
++/* Build an output string based on reason, source ip, and ttl.
++ * Uses a static return value so previous values will be over
++ * written by subsequent calls */
++char *port_reason_details_str(state_reason_t r) {
++	static char reason[4096];
++	static char ttl[64];
++
++	memset(reason,'\0', 4096);
++	memset(ttl,'\0', 64);
++
++	Snprintf(ttl, 64, "%u", r.ttl);
++	Snprintf(reason, 4096, "%s%s%s%s%s", reason_str(r.reason_id, SINGULAR),
++			(r.ip_addr.s_addr==0)?"":" from ",
++			(r.ip_addr.s_addr==0)?"":inet_ntoa(r.ip_addr),
++			(r.ttl==0)?"":" with TTL ",
++			(r.ttl==0)?"":ttl);
++	return reason;
++}
+diff --git a/portreasons.h b/portreasons.h
+index f8b09e8..e8a7299 100644
+--- a/portreasons.h
++++ b/portreasons.h
+@@ -176,6 +176,7 @@ void print_xml_state_summary(PortList *Ports, int state);
+  * Uses static return value so previous values will be over
+  * written by subsequent calls */
+ char *port_reason_str(state_reason_t r);
++char *port_reason_details_str(state_reason_t r);
+ char *target_reason_str(Target *t);
+ 
+ #endif

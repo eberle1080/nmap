@@ -1,0 +1,36 @@
+This is a patch to show more details when running nmap, particularly about
+TTL and filtered states.
+
+I wrote this for my requirements class. I made this guy's dreams come true:
+
+http://seclists.org/nmap-dev/2009/q4/287
+
+Seriously, that guy was so happy, he was like, "dude, I'm really happy". Good
+for you, man. Glad you like it.
+
+No warranties, no tears. Also a WTFPL license.
+
+--------------------------------------------------------------------------------
+
+To use this thing:
+
+$> svn checkout svn://svn.insecure.org/nmap@21208 && cd nmap
+$> patch -p1 < /path/to/nmap-reason-details.patch
+$> ./configure && make && make install 
+
+$> nmap -sS scanme.nmap.org --reason-details -n
+
+Starting Nmap 5.36TEST2 ( http://nmap.org ) at 2010-11-28 19:11 MST
+Nmap scan report for scanme.nmap.org (64.13.134.52)
+Host is up, received echo-reply (0.057s latency).
+PORT      STATE    SERVICE REASON
+22/tcp    open     ssh     syn-ack with TTL 52
+25/tcp    closed   smtp    reset with TTL 52
+53/tcp    open     domain  syn-ack with TTL 52
+70/tcp    closed   gopher  reset with TTL 52
+80/tcp    open     http    syn-ack with TTL 52
+113/tcp   closed   auth    reset with TTL 52
+443/tcp   filtered https   admin-prohibited from 10.0.0.1 with TTL 64
+31337/tcp closed   Elite   reset with TTL 52
+
+Nmap done: 1 IP address (1 host up) scanned in 15.12 seconds 
